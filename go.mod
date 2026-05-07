@@ -4,7 +4,7 @@ go 1.21.5
 
 require (
 	github.com/google/go-github/v58 v58.0.0
-	github.com/pelletier/go-toml/v2 v2.3.0
+	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/spf13/cobra v1.10.2
 )
 
