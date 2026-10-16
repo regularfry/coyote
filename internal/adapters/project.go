@@ -44,7 +44,6 @@ func (p *Project) GetName() string {
 	name, err := os.ReadFile(p.Path + "/.coyote/project-name")
 	if err != nil {
 		panic(err) // This is a holding pattern, I don't think it should happen but need to check
-		return ""
 	}
 	return strings.TrimSpace(string(name))
 }
