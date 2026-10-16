@@ -358,11 +358,14 @@ func buildMetadata(tempDir string, pkgname string, version string) error {
 	os.WriteFile(metadataDir+"/VERSION", []byte(version), 0777)
 	os.WriteFile(metadataDir+"/NAME", []byte(pkgname), 0777)
 
-	if check, err := os.ReadFile(metadataDir + "/NAME"); string(check) == "" {
-		fmt.Errorf("error reading back NAME from metadata: %v", err)
-	}
-	if check, err := os.ReadFile(metadataDir + "/VERSION"); string(check) == "" {
-		fmt.Errorf("error reading back VERSION from metadata: %v", err)
+	for _, field := range []string{"NAME", "VERSION"} {
+		check, err := os.ReadFile(metadataDir + "/" + field)
+		if err != nil {
+			return fmt.Errorf("error reading back %s from metadata: %v", field, err)
+		}
+		if string(check) == "" {
+			return fmt.Errorf("%s in metadata is empty", field)
+		}
 	}
 
 	CopyFileIfExist(".cypkg/"+pkgname+"/on-install", metadataDir+"/on-install")
