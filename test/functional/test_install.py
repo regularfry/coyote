@@ -228,3 +228,17 @@ def test_install_explicit_version_not_found():
             assert(cmd.returncode != 0)
             assert('version v9.9.9 not found' in cmd.stderr.decode('utf-8') or
                    'not found' in cmd.stderr.decode('utf-8'))
+
+def test_install_legacy_build_script_package():
+    # Older versions of coyote stored build-script package metadata as ".CYMETA/<field>"
+    # instead of "./.CYMETA/<field>". Those packages must still install, and the metadata
+    # must not appear in the project.
+    with CoyoteTestContext() as ctx:
+        package_path = build_legacy_build_script_package(
+            ctx.path(), 'legacy-package', 'v1.2.3',
+            {'canary': 'This is a legacy package'})
+        index = Indexer(package_path).build(ctx)
+        with NewProjectContext('my-new-project'):
+            coyote('install', 'legacy-package', '--index', index.target_path)
+            assert(Path('canary').read_text() == 'This is a legacy package')
+            assert(not Path('.CYMETA').exists())

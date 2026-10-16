@@ -15,6 +15,27 @@ import (
 	core "github.com/nhsdigital/coyote/internal/core"
 )
 
+// metadataDirName is the directory in a package that holds its metadata
+// (NAME, VERSION, DEPENDS, CONFLICTS, on-install).
+const metadataDirName = ".CYMETA"
+
+// metadataArchivePrefix is the member-name prefix for metadata inside a .cypkg archive.
+//
+// Do not remove the "./". GNU tar matches member names exactly, so "./.CYMETA/NAME" and
+// ".CYMETA/NAME" are different paths to it. bsdtar (the default on macOS) ignores the
+// prefix, so tests on macOS do not show the problem. Only a run with GNU tar (Linux) fails.
+// See commit 351d156.
+//
+// Every package that coyote builds must store its metadata under this prefix:
+//   - buildDefaultPackage gets the prefix because it archives ".".
+//   - buildWithBuildScript adds the metadata with this prefix explicitly.
+const metadataArchivePrefix = "./" + metadataDirName + "/"
+
+// legacyMetadataArchivePrefix is the prefix that older versions of coyote used for
+// packages built with a build script. ReadMetadata and Apply accept it so that those
+// packages still work. Do not use it for new packages.
+const legacyMetadataArchivePrefix = metadataDirName + "/"
+
 func CopyFile(src, dst string) {
 	srcFile, err := os.Open(src)
 	if err != nil {
@@ -74,19 +95,26 @@ func (p PackageTarFileProvider) Open(location string) core.PackageFile {
 Read a metadata field from the file.
 
 	Missing fields return an empty string, which is valid for (for instance) the on-install field
+
+	Both metadataArchivePrefix and legacyMetadataArchivePrefix are checked, so packages
+	built by older versions of coyote still work. See metadataArchivePrefix for why the
+	prefix matters.
 */
 func (p PackageTarFile) ReadMetadata(field string) string {
-	fileCheck := exec.Command("tar", "-tf", p.Filename, "./.CYMETA/"+field)
-	if err := fileCheck.Run(); err != nil {
-		return ""
-	} else {
-		cmd := exec.Command("tar", "-xOf", p.Filename, "./.CYMETA/"+field)
+	for _, prefix := range []string{metadataArchivePrefix, legacyMetadataArchivePrefix} {
+		entry := prefix + field
+		fileCheck := exec.Command("tar", "-tf", p.Filename, entry)
+		if err := fileCheck.Run(); err != nil {
+			continue
+		}
+		cmd := exec.Command("tar", "-xOf", p.Filename, entry)
 		output, err := cmd.Output()
 		if err != nil {
 			panic(err)
 		}
 		return strings.TrimSpace(string(output))
 	}
+	return ""
 }
 
 func templateString(contents string, vars core.PackageTemplateVars, label string) string {
@@ -259,7 +287,8 @@ func buildWithBuildScript(packageRootDir string, rootTempDir string, filename st
 		return "", fmt.Errorf("error writing build output to file: %v", err)
 	}
 
-	tarCmd := exec.Command("tar", "-rf", tempFilename, "-C", packageRootDir, ".CYMETA")
+	// The "./" in this argument sets the member names in the archive. See metadataArchivePrefix.
+	tarCmd := exec.Command("tar", "-rf", tempFilename, "-C", packageRootDir, "./"+metadataDirName)
 	_, err = tarCmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("error running tar command `%v`: %v", tarCmd, err)
@@ -299,6 +328,8 @@ func gzipToFile(srcFilename string, destFilename string) error {
 }
 
 func buildDefaultPackage(packageRootDir string, rootTempDir string, filename string) (string, error) {
+	// Archiving "." gives every member the "./" prefix, so the metadata is stored under
+	// metadataArchivePrefix. Do not change "." to a list of files without keeping that prefix.
 	tarCmd := exec.Command("tar", "-czf", "-", "-C", packageRootDir, ".")
 	tarOutput, tarErr := tarCmd.Output()
 	if tarErr != nil {
@@ -316,24 +347,25 @@ func buildDefaultPackage(packageRootDir string, rootTempDir string, filename str
 }
 
 func buildMetadata(tempDir string, pkgname string, version string) error {
-	os.Mkdir(tempDir+"/.CYMETA", 0777)
+	metadataDir := tempDir + "/" + metadataDirName
+	os.Mkdir(metadataDir, 0777)
 
-	os.WriteFile(tempDir+"/.CYMETA/DEPENDS", []byte(""), 0777)
-	CopyFileIfExist(".cypkg/"+pkgname+"/DEPENDS", tempDir+"/.CYMETA/DEPENDS")
-	os.WriteFile(tempDir+"/.CYMETA/CONFLICTS", []byte(""), 0777)
-	CopyFileIfExist(".cypkg/"+pkgname+"/CONFLICTS", tempDir+"/.CYMETA/CONFLICTS")
+	os.WriteFile(metadataDir+"/DEPENDS", []byte(""), 0777)
+	CopyFileIfExist(".cypkg/"+pkgname+"/DEPENDS", metadataDir+"/DEPENDS")
+	os.WriteFile(metadataDir+"/CONFLICTS", []byte(""), 0777)
+	CopyFileIfExist(".cypkg/"+pkgname+"/CONFLICTS", metadataDir+"/CONFLICTS")
 
-	os.WriteFile(tempDir+"/.CYMETA/VERSION", []byte(version), 0777)
-	os.WriteFile(tempDir+"/.CYMETA/NAME", []byte(pkgname), 0777)
+	os.WriteFile(metadataDir+"/VERSION", []byte(version), 0777)
+	os.WriteFile(metadataDir+"/NAME", []byte(pkgname), 0777)
 
-	if check, err := os.ReadFile(tempDir + "/.CYMETA/NAME"); string(check) == "" {
+	if check, err := os.ReadFile(metadataDir + "/NAME"); string(check) == "" {
 		fmt.Errorf("error reading back NAME from metadata: %v", err)
 	}
-	if check, err := os.ReadFile(tempDir + "/.CYMETA/VERSION"); string(check) == "" {
+	if check, err := os.ReadFile(metadataDir + "/VERSION"); string(check) == "" {
 		fmt.Errorf("error reading back VERSION from metadata: %v", err)
 	}
 
-	CopyFileIfExist(".cypkg/"+pkgname+"/on-install", tempDir+"/.CYMETA/on-install")
+	CopyFileIfExist(".cypkg/"+pkgname+"/on-install", metadataDir+"/on-install")
 	return nil
 }
 
@@ -387,7 +419,10 @@ func (p PackageTarFile) Apply(vars core.PackageTemplateVars) {
 			panic(err)
 		}
 
-		if strings.HasPrefix(header.Name, "./.CYMETA/") || strings.HasPrefix(header.Name, ".CYMETA/") || header.Name == ".CYMETA" {
+		// Skip the metadata, in both the current and the legacy layout. See metadataArchivePrefix.
+		if strings.HasPrefix(header.Name, metadataArchivePrefix) ||
+			strings.HasPrefix(header.Name, legacyMetadataArchivePrefix) ||
+			header.Name == metadataDirName {
 			continue
 		}
 

@@ -161,3 +161,23 @@ def test_index_latest_version_is_determined_correctly():
         # The latest should be v1.0.11 (highest by semantic versioning, not asciibetic)
         assert(pkg_entry['version'] == 'v1.0.11')
 
+
+
+def test_index_reads_metadata_from_legacy_build_script_package():
+    # Older versions of coyote stored build-script package metadata as ".CYMETA/<field>"
+    # instead of "./.CYMETA/<field>". The index must still read those packages.
+    with CoyoteTestContext() as ctx:
+        package_path = build_legacy_build_script_package(
+            ctx.path(), 'legacy-package', 'v1.2.3',
+            {'canary': 'This is a legacy package'},
+            depends='upstream-dependency\n')
+        upstream_path = PackageTemplate('upstream-root') \
+            .build(ctx.path(), 'upstream-dependency')
+
+        index = Indexer(package_path, upstream_path).build(ctx)
+
+        index_data = json.loads(index.target_path.read_text())
+        pkg_entry = index_data['packages']['legacy-package']
+        assert(pkg_entry['name'] == 'legacy-package')
+        assert(pkg_entry['version'] == 'v1.2.3')
+        assert(pkg_entry['dependencies'] == ['upstream-dependency'])

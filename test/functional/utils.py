@@ -165,6 +165,37 @@ class PackageTemplate:
             return workdir / package_name
 
 
+def build_legacy_build_script_package(workdir, name, version, files, depends=''):
+    """Build a .cypkg in the layout that older versions of coyote made with a build script.
+
+    Those versions stored the metadata entries as ".CYMETA/<field>", without the "./" prefix
+    that default packages have. We build the archive by hand so that the test does not depend
+    on the current `package build` behaviour."""
+    import io
+    import tarfile
+
+    def add(tar, arcname, contents):
+        data = contents.encode('utf-8')
+        info = tarfile.TarInfo(arcname)
+        info.size = len(data)
+        info.mode = 0o644
+        tar.addfile(info, io.BytesIO(data))
+
+    package_path = Path(workdir) / f"{name}-{version}.cypkg"
+    with tarfile.open(package_path, 'w:gz', format=tarfile.GNU_FORMAT) as tar:
+        for path, contents in files.items():
+            add(tar, path, contents)
+        cymeta_dir = tarfile.TarInfo('.CYMETA')
+        cymeta_dir.type = tarfile.DIRTYPE
+        cymeta_dir.mode = 0o755
+        tar.addfile(cymeta_dir)
+        add(tar, '.CYMETA/NAME', name)
+        add(tar, '.CYMETA/VERSION', version)
+        add(tar, '.CYMETA/DEPENDS', depends)
+        add(tar, '.CYMETA/CONFLICTS', '')
+    return package_path
+
+
 def build_package(workdir, repo_root, name):
     return PackageTemplate(repo_root) \
         .build(workdir, name)
